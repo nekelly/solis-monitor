@@ -1,0 +1,20 @@
+services:
+  solis-web:
+    build: .
+    image: solis-web:latest
+    container_name: solis-web
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"   # start a new log file when the current one reaches 10 MB
+        max-file: "3"     # keep at most 3 files (about 30 MB in total); the oldest is deleted
+    ports:
+      - "8080:8080"   # change the first number to use a different port on the server
+    volumes:
+      - ./data:/data  # the SQLite database (data/solis.db); create the folder owned by uid 1000 before first start
+    environment:
+      SCAN_SUBNET: "192.168.1.0/24"
+      PAGE_TITLE: "Solis S6"       # title shown at the top of the page and in the browser tab
+      POLL_SECONDS: "120"           # how often to read the inverter and save a reading (minimum 5)
+      RETENTION_DAYS: "30"        # delete readings older than this many days; "0" keeps everything

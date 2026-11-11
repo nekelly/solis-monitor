@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ page_title }}</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page:           #f9f9f7;
+    --surface:        #fcfcfb;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --border:         rgba(11, 11, 11, 0.10);
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --critical:       #d03b3b;
+    /* One colour per part of the energy flow; validated as a set for colour-blind separation */
+    --solar:          #eb6834;
+    --battery:        #1baf7a;
+    --grid:           #2a78d6;
+    --neutral:        #898781;
+    --house:          #e87ba4;
+    --inverter:       #eda100;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page:           #0d0d0d;
+      --surface:        #1a1a19;
+      --text-primary:   #f0efec;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --border:         rgba(255, 255, 255, 0.10);
+      --gridline:       #2c2c2a;
+      --baseline:       #383835;
+      --solar:          #d95926;
+      --battery:        #199e70;
+      --grid:           #3987e5;
+      --house:          #d55181;
+      --inverter:       #c98500;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.4;
+  }
+  main { max-width: 1040px; margin: 0 auto; padding: 16px 16px 32px; }
+
+  /* Title on its own line, with the status and controls underneath */
+  h1 { margin: 0; font-size: 22px; font-weight: 600; }
+  header .controls { margin-top: 6px; }
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; }
+  .status { color: var(--text-secondary); font-size: 14px; }
+
+  .banner {
+    display: none;
+    margin-top: 16px;
+    padding: 10px 14px;
+    border: 1px solid var(--critical);
+    border-radius: 8px;
+    background: var(--surface);
+    font-size: 14px;
+  }
+  .banner.visible { display: block; }
+  .banner strong { color: var(--critical); }
+
+  section { margin-top: 16px; }
+  h2 { margin: 0 0 6px; font-size: 14px; font-weight: 600; color: var(--text-secondary); }
+
+  /* Each section has four tiles: 4 across, then 2x2 on narrow screens, then stacked */
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  @media (max-width: 720px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 340px) { .tiles { grid-template-columns: 1fr; } }
+  .table-wrap { overflow-x: auto; }
+  .tile {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    transition: opacity 0.2s;
+  }
+  .solar   { --accent: var(--solar); }
+  .battery { --accent: var(--battery); }
+  .grid    { --accent: var(--grid); }
+  .house    { --accent: var(--house); }
+  .inverter { --accent: var(--inverter); }
+  /* Coloured tiles get a top bar and a light tint in their accent colour */
+  .tile:is(.solar, .house, .battery, .grid, .inverter) {
+    background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+    border-top: 3px solid var(--accent);
+    padding-top: 8px;
+  }
+  .stale .tile, .stale table { opacity: 0.5; }
+  .tile .label { font-size: 13px; color: var(--text-secondary); }
+  .tile .value { margin-top: 2px; font-size: 24px; font-weight: 600; line-height: 1.2; }
+  .tile .value .unit { font-size: 14px; font-weight: 500; color: var(--text-secondary); margin-left: 3px; }
+  .tile .state { font-size: 13px; font-weight: 500; }
+  .tile .detail { margin-top: 4px; font-size: 12px; color: var(--text-secondary); }
+  .tile.small .value { font-size: 18px; }
+  .tile.small .value .unit { font-size: 13px; }
+  /* Top row ("Power now"): slimmer boxes */
+  .tiles.power .tile { padding: 6px 10px 8px; }
+  .tiles.power .tile .value { font-size: 20px; }
+  .tiles.power .tile .value .unit { font-size: 13px; }
+  .tile .value .soc { margin-left: 12px; font-size: inherit; font-weight: 500; color: var(--text-secondary); }
+
+  .meter { display: block; margin-top: 6px; height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--battery) 25%, var(--surface)); overflow: hidden; }
+  .meter > span { display: block; height: 100%; width: 0; border-radius: 3px; background: var(--battery); transition: width 0.4s; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    font-size: 14px;
+  }
+  th, td { padding: 6px 12px; text-align: right; white-space: nowrap; }
+  @media (max-width: 480px) { th, td { padding: 6px 8px; } }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { font-size: 13px; font-weight: 500; color: var(--text-muted); border-bottom: 1px solid var(--gridline); }
+  tbody tr + tr td { border-top: 1px solid var(--gridline); }
+  td { font-variant-numeric: tabular-nums; }
+  td .unit { color: var(--text-muted); margin-left: 3px; }
+  tbody td:first-child::before {
+    content: "";
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-right: 8px;
+    border-radius: 50%;
+    background: var(--accent, var(--neutral));
+  }
+
+  footer { margin-top: 16px; font-size: 12px; color: var(--text-muted); }
+
+  /* Tiles that open a graph */
+  button.tile { font: inherit; color: inherit; text-align: left; width: 100%; cursor: pointer; }
+  button.tile .label, button.tile .value, button.tile .detail { display: block; }
+  .chart-trigger { position: relative; transition: box-shadow 0.15s; }
+  .chart-icon {
+    position: absolute;
+    right: 8px;
+    bottom: 6px;
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: var(--text-muted);
+    stroke-width: 1.5;
+  }
+  .chart-trigger .meter { margin-right: 22px; }   /* leave room for the icon beside the charge bar */
+  .chart-trigger:hover { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); }
+  .chart-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* Rise/fall arrow beside the label: compares the box's graphed value with the previous reading */
+  .trend { float: right; font-size: 10px; line-height: 19px; color: var(--text-secondary); }
+
+  /* Graph dialog */
+  #chart-dialog {
+    width: min(900px, 94vw);
+    max-height: 90vh;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+    color: var(--text-primary);
+  }
+  #chart-dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+  .dialog-body { padding: 14px 16px 16px; }
+  .dialog-head { display: flex; align-items: center; justify-content: space-between; }
+  #chart-title { margin: 0; font-size: 16px; color: var(--text-primary); }
+  .dialog-close {
+    padding: 2px 8px;
+    font: inherit;
+    font-size: 22px;
+    line-height: 1;
+    color: var(--text-secondary);
+    background: none;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .dialog-close:hover { background: var(--gridline); }
+  .ranges { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+  .ranges button {
+    padding: 4px 10px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text-secondary);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .ranges button[aria-pressed="true"] { color: var(--surface); background: var(--text-primary); border-color: var(--text-primary); }
+  .chart-box { position: relative; height: 300px; }
+  #chart-svg { display: block; width: 100%; height: 100%; touch-action: pan-y; }
+  .chart-grid { stroke: var(--gridline); stroke-width: 1; }
+  .chart-baseline { stroke: var(--baseline); stroke-width: 1; }
+  .chart-axis { fill: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .chart-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .chart-area { fill: var(--accent); opacity: 0.12; }
+  .chart-point { fill: var(--accent); }
+  .chart-cross { stroke: var(--text-muted); stroke-width: 1; }
+  .chart-dot { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+  .chart-hover { visibility: hidden; }
+  .chart-hover.on { visibility: visible; }
+  .chart-message { fill: var(--text-secondary); font-size: 14px; }
+  .chart-tooltip {
+    position: absolute;
+    top: 8px;
+    padding: 6px 8px;
+    font-size: 13px;
+    white-space: nowrap;
+    pointer-events: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  }
+  .chart-tooltip .time { font-size: 12px; color: var(--text-secondary); }
+  .chart-tooltip .reading { font-weight: 600; }
+  .chart-summary { min-height: 1.4em; margin-top: 8px; font-size: 13px; color: var(--text-secondary); }
+</style>
+</head>
+<body>
+{# Graph icon for tiles that open a graph; positioned in the tile's bottom-right corner by CSS #}
+{% macro chart_icon() %}<svg class="chart-icon" viewBox="0 0 14 14" aria-hidden="true"><polyline points="1,12 5,7 8,9 13,2"/></svg>{% endmacro %}
+<main>
+  <header>
+    <h1>{{ page_title }}</h1>
+    <div class="controls">
+      <div class="status" id="status">Connecting…</div>
+    </div>
+  </header>
+
+  <div class="banner" id="banner" role="alert"><strong>⚠ <span id="banner-title"></span></strong> — <span id="banner-text"></span></div>
+
+  <div id="content" class="stale">
+    <section aria-labelledby="power-heading">
+      <h2 id="power-heading">Power now</h2>
+      <div class="tiles power">
+        {# Any tile becomes a graph button with: class "chart-trigger" + data-field (a database column),
+           data-title, data-unit and data-color (the accent class). A <span class="trend"> in the label
+           shows whether data-field rose or fell since the previous reading. #}
+        <button type="button" class="tile solar chart-trigger" aria-haspopup="dialog"
+                data-field="solar_power" data-title="Solar power" data-unit="W" data-color="solar">
+          <span class="label">Solar<span class="trend"></span>{{ chart_icon() }}</span>
+          <span class="value"><span id="solar-power">–</span><span class="unit">W</span></span>
+        </button>
+        <button type="button" class="tile house chart-trigger" aria-haspopup="dialog"
+                data-field="house_load_power" data-title="House load" data-unit="W" data-color="house">
+          <span class="label">House load<span class="trend"></span>{{ chart_icon() }}</span>
+          <span class="value"><span id="load-power">–</span><span class="unit">W</span></span>
+        </button>
+        <button type="button" class="tile battery chart-trigger" aria-haspopup="dialog"
+                data-field="battery_soc" data-title="Battery charge" data-unit="%" data-color="battery"
+                data-decimals="0" data-peak-label="Highest">
+          <span class="label">Battery&nbsp;· <span class="state" id="battery-state">–</span><span class="trend"></span>{{ chart_icon() }}</span>
+          <span class="value"><span id="battery-power">–</span><span class="unit">W</span><span class="soc" id="battery-soc"></span></span>
+          <span class="meter" id="battery-meter" role="meter" aria-label="Battery charge" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="battery-meter-fill"></span></span>
+        </button>
+        {# grid_power is signed: positive = exporting, negative = importing #}
+        <button type="button" class="tile grid chart-trigger" aria-haspopup="dialog"
+                data-field="grid_power" data-title="Grid power (+ export, − import)" data-unit="W" data-color="grid"
+                data-peak-label="Most exported" data-low-label="Most imported" data-signed="true">
+          <span class="label">Grid&nbsp;· <span class="state" id="grid-state">–</span><span class="trend"></span>{{ chart_icon() }}</span>
+          <span class="value"><span id="grid-power">–</span><span class="unit">W</span></span>
+        </button>
+      </div>
+    </section>
+
+    <section aria-labelledby="inverter-heading">
+      <h2 id="inverter-heading">Inverter</h2>
+      <div class="tiles">
+        <button type="button" class="tile small solar chart-trigger" aria-haspopup="dialog"
+                data-field="pv1_power" data-title="PV1 string power" data-unit="W" data-color="solar">
+          <span class="label">PV1 string<span class="trend"></span>{{ chart_icon() }}</span>
+          <span class="value"><span id="pv1-power">–</span><span class="unit">W</span></span>
+          <span class="detail" id="pv1-detail">&nbsp;</span>
+        </button>
+        <button type="button" class="tile small solar chart-trigger" aria-haspopup="dialog"
+                data-field="pv2_power" data-title="PV2 string power" data-unit="W" data-color="solar">
+          <span class="label">PV2 string<span class="trend"></span>{{ chart_icon() }}</span>
+          <span class="value"><span id="pv2-power">–</span><span class="unit">W</span></span>
+          <span class="detail" id="pv2-detail">&nbsp;</span>
+        </button>
+        <div class="tile small inverter">
+          <div class="label">AC output</div>
+          <div class="value"><span id="ac-power">–</span><span class="unit">W</span></div>
+        </div>
+        <div class="tile small inverter">
+          <div class="label">Temperature</div>
+          <div class="value"><span id="temperature">–</span><span class="unit">°C</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="energy-heading">
+      <h2 id="energy-heading">Energy</h2>
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th scope="col"></th><th scope="col">Today</th><th scope="col">Yesterday</th><th scope="col">Total</th></tr>
+        </thead>
+        <tbody>
+          {% for key, label in energy_labels.items() %}
+          {# row class is the key's first word: solar, house, battery or grid #}
+          <tr data-energy="{{ key }}" class="{{ key.split('_')[0] }}">
+            <td>{{ label }}</td>
+            <td><span data-field="today">–</span><span class="unit">kWh</span></td>
+            <td><span data-field="yesterday">–</span><span class="unit">kWh</span></td>
+            <td><span data-field="total">–</span><span class="unit">kWh</span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    </section>
+  </div>
+
+  <footer>Version {{ version }}</footer>
+</main>
+
+<dialog id="chart-dialog" aria-labelledby="chart-title">
+  <div class="dialog-body">
+    <div class="dialog-head">
+      <h2 id="chart-title"></h2>
+      <button type="button" class="dialog-close" id="chart-close" aria-label="Close">×</button>
+    </div>
+    <div class="ranges" role="group" aria-label="Time range">
+      <button type="button" data-range="6h">6 hours</button>
+      <button type="button" data-range="12h">12 hours</button>
+      <button type="button" data-range="24h">24 hours</button>
+      <button type="button" data-range="7d">7 days</button>
+    </div>
+    <div class="chart-box" id="chart-box">
+      <svg id="chart-svg" role="img" aria-labelledby="chart-title"></svg>
+      <div class="chart-tooltip" id="chart-tooltip" hidden></div>
+    </div>
+    <div class="chart-summary" id="chart-summary"></div>
+  </div>
+</dialog>
+
+<script>
+  // The server polls the inverter on a fixed schedule; the page fetches the latest reading just after each poll
+  const IDLE_WATTS = 10;           // below this, battery and grid are shown as idle
+  const FETCH_DELAY_SECONDS = 3;   // wait this long after a scheduled poll, so the new reading is ready
+  const RETRY_SECONDS = 30;        // how soon to try again if the web app itself can't be reached
+
+  const $ = id => document.getElementById(id);
+  const watts = w => Math.round(Math.abs(w)).toLocaleString();
+  const fixed = (n, digits) => n.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+
+  let takenAt = null;   // when the reading on screen was taken (browser clock, ms)
+  let lastTakenAt = null;  // server timestamp of that reading, to spot new ones
+  let nextFetchAt = 0;
+  let timer = null;
+  let pollSeconds = null;  // the server's POLL_SECONDS, shown in the status line
+
+  function render(d, pvEnergy) {
+    $("solar-power").textContent = watts(d.solar_power);
+
+    $("load-power").textContent = watts(d.house_load_power);
+
+    const batteryIdle = Math.abs(d.battery_power) < IDLE_WATTS;
+    $("battery-state").textContent = batteryIdle ? "Idle" : (d.battery_discharging ? "Discharging" : "Charging");
+    $("battery-power").textContent = watts(d.battery_power);
+    $("battery-meter-fill").style.width = `${Math.min(100, Math.max(0, d.battery_soc))}%`;
+    $("battery-meter").setAttribute("aria-valuenow", d.battery_soc);
+    $("battery-soc").textContent = `${d.battery_soc}%`;
+
+    const gridIdle = Math.abs(d.grid_power) < IDLE_WATTS;
+    $("grid-state").textContent = gridIdle ? "Idle" : (d.grid_power > 0 ? "Exporting" : "Importing");
+    $("grid-power").textContent = watts(d.grid_power);
+
+    // Each string's detail line: voltage, current and its estimated energy so far today (from the server)
+    for (const n of [1, 2]) {
+      const kwh = pvEnergy ? pvEnergy[`pv${n}_power`] : null;
+      $(`pv${n}-power`).textContent = watts(d[`pv${n}_power`]);
+      $(`pv${n}-detail`).textContent = `${fixed(d[`pv${n}_voltage`], 1)} V · ${fixed(d[`pv${n}_current`], 1)} A`
+        + (kwh === null || kwh === undefined ? "" : ` · ${fixed(kwh, 1)} kWh`);
+    }
+    $("ac-power").textContent = watts(d.inverter_ac_power);
+    $("temperature").textContent = fixed(d.inverter_temperature, 1);
+
+    for (const row of document.querySelectorAll("[data-energy]")) {
+      const counter = d.energy[row.dataset.energy];
+      row.querySelector('[data-field="today"]').textContent = fixed(counter.today, 1);
+      row.querySelector('[data-field="yesterday"]').textContent = fixed(counter.yesterday, 1);
+      row.querySelector('[data-field="total"]').textContent = counter.total.toLocaleString();
+    }
+  }
+
+  // Changes smaller than this (by unit) count as steady, so meter noise doesn't flicker the arrows
+  const TREND_DEADBAND = { W: 10 };
+
+  function showTrends(reading, previous) {
+    for (const trigger of document.querySelectorAll(".chart-trigger")) {
+      const arrow = trigger.querySelector(".trend");
+      if (!arrow) continue;
+      const field = trigger.dataset.field, unit = trigger.dataset.unit;
+      const change = previous ? reading[field] - previous[field] : 0;
+      const deadband = TREND_DEADBAND[unit] || 0;
+      const rising = change > deadband, falling = change < -deadband;
+      arrow.textContent = rising ? "▲" : falling ? "▼" : "";
+      const amount = `${Math.round(Math.abs(change)).toLocaleString()}${unit === "%" ? "%" : ` ${unit}`}`;
+      arrow.title = rising ? `Up ${amount} since the previous reading`
+                  : falling ? `Down ${amount} since the previous reading` : "";
+      if (rising || falling) {
+        arrow.setAttribute("role", "img");
+        arrow.setAttribute("aria-label", arrow.title);
+      } else {
+        arrow.removeAttribute("role");
+        arrow.removeAttribute("aria-label");
+      }
+    }
+  }
+
+  function showProblem(title, detail) {
+    $("banner").classList.toggle("visible", title !== null);
+    $("banner-title").textContent = title || "";
+    const shown = takenAt ? ` Showing the reading from ${new Date(takenAt).toLocaleTimeString()}.` : "";
+    $("banner-text").textContent = title ? `${detail}${shown}` : "";
+  }
+
+  async function update() {
+    let delaySeconds = RETRY_SECONDS;
+    try {
+      const response = await fetch("api/data", { cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const body = await response.json();
+      if (body.reading) {
+        render(body.reading, body.pv_energy_today);
+        showTrends(body.reading, body.previous);
+        // age_seconds is relative, so this is right even if the browser and server clocks differ
+        takenAt = Date.now() - body.age_seconds * 1000;
+        // A new reading arrived: refresh an open graph without the "Loading…" flash
+        if (body.taken_at !== lastTakenAt && chart && chart.data) loadChart(true);
+        lastTakenAt = body.taken_at;
+      }
+      // Before the first poll has finished there's no schedule yet, so check again shortly
+      delaySeconds = (body.seconds_until_next_poll ?? 0) + FETCH_DELAY_SECONDS;
+      pollSeconds = body.poll_seconds;
+      showProblem(body.error ? "Can't reach inverter" : null, body.error);
+      $("content").classList.toggle("stale", Boolean(body.error) || !body.reading);
+    } catch (e) {
+      showProblem("Can't reach the dashboard server", `${e.message}.`);
+      $("content").classList.add("stale");
+    }
+    nextFetchAt = Date.now() + delaySeconds * 1000;
+    clearTimeout(timer);
+    timer = setTimeout(update, delaySeconds * 1000);
+    showStatus();
+  }
+
+  // e.g. 30 -> "30 s", 180 -> "3 min", 90 -> "90 s"
+  const intervalText = seconds => seconds >= 60 && seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds} s`;
+
+  // e.g. "Reading from 18:46:00 · update in 42 s · polled every 3 min"
+  function showStatus() {
+    const secondsLeft = Math.max(0, Math.ceil((nextFetchAt - Date.now()) / 1000));
+    const parts = [
+      takenAt ? `Reading from ${new Date(takenAt).toLocaleTimeString()}` : "Waiting for the first reading",
+      `update in ${secondsLeft} s`,
+    ];
+    if (pollSeconds) parts.push(`polled every ${intervalText(pollSeconds)}`);
+    $("status").textContent = parts.join(" · ");
+  }
+
+  // ---------- History graph (dialog) ----------
+
+  const CHART_HEIGHT = 300;
+  const CHART_MARGIN = { top: 12, right: 16, bottom: 28, left: 56 };
+  const PIXELS_PER_POINT = 4;   // ask the server for about one averaged point per this many pixels of graph width
+  const HOUR = 3600e3, DAY = 24 * HOUR;
+  const svgNS = "http://www.w3.org/2000/svg";
+  const chartDialog = $("chart-dialog");
+  let chart = null;          // { field, title, unit, range, data, view }
+  let chartRequest = 0;      // ignores replies to superseded requests
+
+  // Uses the tile's data-decimals if set; otherwise whole numbers from 100 up and one decimal below
+  function formatValue(v) {
+    const decimals = chart && chart.decimals !== null ? chart.decimals : (Math.abs(v) >= 100 ? 0 : 1);
+    return fixed(v, decimals);
+  }
+  const withUnit = v => chart.unit === "%" ? `${formatValue(v)}%` : `${formatValue(v)} ${chart.unit}`;
+  // Axis ticks are round numbers, so show whole ones without decimals
+  const axisLabel = v => Number.isInteger(v) ? v.toLocaleString() : formatValue(v);
+
+  function formatTime(ms, withDate) {
+    const options = withDate
+      ? { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }
+      : { weekday: "short", hour: "2-digit", minute: "2-digit" };
+    return new Date(ms).toLocaleString(undefined, options);
+  }
+
+  // Averaging step as words, e.g. "9-minute"; uses the largest unit that divides it exactly
+  function bucketLabel(seconds) {
+    if (seconds % 3600 === 0) return `${seconds / 3600}-hour`;
+    if (seconds % 60 === 0) return `${seconds / 60}-minute`;
+    return `${seconds}-second`;
+  }
+
+  function openChart(trigger) {
+    chart = { field: trigger.dataset.field, title: trigger.dataset.title, unit: trigger.dataset.unit,
+              decimals: trigger.dataset.decimals !== undefined ? Number(trigger.dataset.decimals) : null,
+              peakLabel: trigger.dataset.peakLabel || "Peak",
+              lowLabel: trigger.dataset.lowLabel || null,     // also show the lowest reading, if set
+              signed: trigger.dataset.signed === "true",      // values above/below zero mean different things
+              range: "6h", data: null, view: null };
+    chartDialog.className = trigger.dataset.color || "";   // sets --accent for the line colour
+    $("chart-title").textContent = chart.title;
+    chartDialog.showModal();
+    loadChart(false);
+  }
+
+  // How many points suit the graph's current width (the server averages readings down to this)
+  function pointsForWidth() {
+    const plotWidth = $("chart-box").clientWidth - CHART_MARGIN.left - CHART_MARGIN.right;
+    return Math.max(20, Math.round(plotWidth / PIXELS_PER_POINT));
+  }
+
+  async function loadChart(quiet) {
+    const request = ++chartRequest;
+    for (const button of document.querySelectorAll(".ranges button")) {
+      button.setAttribute("aria-pressed", String(button.dataset.range === chart.range));
+    }
+    if (!quiet) {
+      chart.data = null;
+      drawMessage("Loading…");
+      $("chart-summary").textContent = "";
+    }
+    chart.pointsWanted = pointsForWidth();
+    try {
+      const response = await fetch(
+        `api/history?field=${encodeURIComponent(chart.field)}&range=${chart.range}&points=${chart.pointsWanted}`,
+        { cache: "no-store" });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+      if (request !== chartRequest || !chartDialog.open) return;
+      chart.data = body;
+      drawChart();
+    } catch (e) {
+      if (request === chartRequest && !quiet) drawMessage(`Couldn't load the history: ${e.message}`);
+    }
+  }
+
+  function svgEl(name, attrs, text) {
+    const el = document.createElementNS(svgNS, name);
+    for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, value);
+    if (text !== undefined) el.textContent = text;
+    return el;
+  }
+
+  function drawMessage(text) {
+    const svg = $("chart-svg");
+    svg.replaceChildren(svgEl("text", { x: "50%", y: CHART_HEIGHT / 2, "text-anchor": "middle", class: "chart-message" }, text));
+    if (chart) chart.view = null;
+    $("chart-tooltip").hidden = true;
+  }
+
+  // Round axis steps (1, 2, 2.5, 5 x 10^n), always including zero
+  function niceTicks(low, high, count) {
+    low = Math.min(0, low);
+    high = Math.max(0, high);
+    if (high === low) high = low + 10;
+    const raw = (high - low) / count;
+    const magnitude = 10 ** Math.floor(Math.log10(raw));
+    const step = [1, 2, 2.5, 5, 10].map(f => f * magnitude).find(s => s >= raw);
+    const ticks = [];
+    for (let v = Math.floor(low / step) * step; v <= Math.ceil(high / step) * step + step / 2; v += step) {
+      ticks.push(Math.round(v * 1e6) / 1e6);
+    }
+    return ticks;
+  }
+
+  // Time ticks on whole local hours or days, as many as fit
+  function timeTicks(t0, t1, maxTicks) {
+    const steps = [HOUR, 2 * HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR, DAY, 2 * DAY, 7 * DAY];
+    const step = steps.find(s => (t1 - t0) / s <= maxTicks) || 7 * DAY;
+    const d = new Date(t0);
+    if (step < DAY) {
+      d.setMinutes(0, 0, 0);
+      while (d.getTime() < t0 || d.getHours() % (step / HOUR)) d.setHours(d.getHours() + 1);
+    } else {
+      d.setHours(0, 0, 0, 0);
+      if (d.getTime() < t0) d.setDate(d.getDate() + 1);
+    }
+    const ticks = [];
+    while (d.getTime() <= t1) {
+      ticks.push(d.getTime());
+      if (step < DAY) d.setHours(d.getHours() + step / HOUR);
+      else d.setDate(d.getDate() + step / DAY);
+    }
+    return { ticks, step };
+  }
+
+  function timeTickLabel(ms, step) {
+    const d = new Date(ms);
+    if (step >= 2 * DAY) return d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    if (step >= DAY || (d.getHours() === 0 && d.getMinutes() === 0)) {
+      return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric" });
+    }
+    return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function drawChart() {
+    const data = chart.data;
+    const points = data.points;
+    const bucketed = data.bucket_seconds > data.poll_seconds;
+    if (!points.length) {
+      drawMessage("No readings in this period yet.");
+      $("chart-summary").textContent = "";
+      return;
+    }
+
+    const width = $("chart-box").clientWidth;
+    const m = CHART_MARGIN;
+    const plotW = width - m.left - m.right;
+    const plotH = CHART_HEIGHT - m.top - m.bottom;
+    const t0 = data.start * 1000, t1 = data.end * 1000;
+    const values = points.map(p => p[1]);
+    const yTicks = niceTicks(Math.min(...values), Math.max(...values), 5);
+    const yLow = yTicks[0], yHigh = yTicks[yTicks.length - 1];
+    const x = t => m.left + (t - t0) / (t1 - t0) * plotW;
+    const y = v => m.top + (1 - (v - yLow) / (yHigh - yLow)) * plotH;
+    const svg = $("chart-svg");
+    svg.replaceChildren();
+
+    // Horizontal gridlines with value labels; the zero line is the baseline
+    for (const v of yTicks) {
+      svg.append(svgEl("line", { x1: m.left, x2: width - m.right, y1: y(v), y2: y(v), class: v === 0 ? "chart-baseline" : "chart-grid" }));
+      svg.append(svgEl("text", { x: m.left - 8, y: y(v) + 4, "text-anchor": "end", class: "chart-axis" }, axisLabel(v)));
+    }
+    svg.append(svgEl("text", { x: 4, y: m.top - 2, class: "chart-axis" }, chart.unit));
+
+    // Time labels
+    const { ticks, step } = timeTicks(t0, t1, Math.max(3, Math.floor(plotW / 90)));
+    for (const t of ticks) {
+      svg.append(svgEl("text", { x: x(t), y: CHART_HEIGHT - 8, "text-anchor": "middle", class: "chart-axis" }, timeTickLabel(t, step)));
+    }
+
+    // Split the line wherever readings are missing, rather than drawing straight across the gap
+    const gapMs = 2.5 * Math.max(data.bucket_seconds, data.poll_seconds) * 1000;
+    const segments = [];
+    let previous = null;
+    for (const [ts, v] of points) {
+      const t = ts * 1000;
+      if (previous === null || t - previous > gapMs) segments.push([]);
+      segments[segments.length - 1].push([x(t), y(v)]);
+      previous = t;
+    }
+    const y0 = y(0);
+    for (const seg of segments) {
+      if (seg.length === 1) {
+        svg.append(svgEl("circle", { cx: seg[0][0], cy: seg[0][1], r: 2, class: "chart-point" }));
+        continue;
+      }
+      const path = seg.map(([px, py], i) => `${i ? "L" : "M"}${px.toFixed(1)},${py.toFixed(1)}`).join("");
+      const last = seg[seg.length - 1];
+      svg.append(svgEl("path", { d: `${path}L${last[0].toFixed(1)},${y0}L${seg[0][0].toFixed(1)},${y0}Z`, class: "chart-area" }));
+      svg.append(svgEl("path", { d: path, class: "chart-line" }));
+    }
+
+    // Hover layer: crosshair and a dot on the nearest reading
+    const hover = svgEl("g", { class: "chart-hover" });
+    hover.append(svgEl("line", { y1: m.top, y2: m.top + plotH, class: "chart-cross" }));
+    hover.append(svgEl("circle", { r: 4, class: "chart-dot" }));
+    svg.append(hover);
+
+    chart.view = { points, x, y, t0, t1, m, plotW, width, gapMs, bucketed, hover };
+
+    $("chart-summary").textContent = chartSummary(data, bucketed);
+  }
+
+  // e.g. "Peak 3,954 W at Tue 11:02". For signed values (grid), the peak only counts if above zero and
+  // the low only if below, both shown as amounts: "Most exported 3,557 W at … · Most imported 2,300 W at …"
+  function chartSummary(data, bucketed) {
+    const withDate = chart.range === "7d";
+    const parts = [];
+    const describe = (label, [ts, value]) =>
+      `${label} ${withUnit(chart.signed ? Math.abs(value) : value)} at ${formatTime(ts * 1000, withDate)}`;
+    if (data.peak && (!chart.signed || data.peak[1] > 0)) parts.push(describe(chart.peakLabel, data.peak));
+    if (chart.lowLabel && data.low && (!chart.signed || data.low[1] < 0)) parts.push(describe(chart.lowLabel, data.low));
+    if (bucketed) parts.push(`each point is a ${bucketLabel(data.bucket_seconds)} average`);
+    return parts.join(" · ");
+  }
+
+  function showHover(event) {
+    const view = chart && chart.view;
+    if (!view) return;
+    const px = event.clientX - $("chart-svg").getBoundingClientRect().left;
+    const t = view.t0 + (px - view.m.left) / view.plotW * (view.t1 - view.t0);
+    // Binary search for the nearest reading
+    const pts = view.points;
+    let lo = 0, hi = pts.length - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (pts[mid][0] * 1000 < t) lo = mid; else hi = mid;
+    }
+    const i = Math.abs(pts[lo][0] * 1000 - t) <= Math.abs(pts[hi][0] * 1000 - t) ? lo : hi;
+    const [ts, value] = pts[i];
+    if (px < view.m.left || px > view.width - view.m.right || Math.abs(ts * 1000 - t) > view.gapMs) {
+      hideHover();
+      return;
+    }
+    const cx = view.x(ts * 1000), cy = view.y(value);
+    const [line, dot] = view.hover.children;
+    line.setAttribute("x1", cx);
+    line.setAttribute("x2", cx);
+    dot.setAttribute("cx", cx);
+    dot.setAttribute("cy", cy);
+    view.hover.classList.add("on");
+
+    const tooltip = $("chart-tooltip");
+    const note = view.bucketed ? ` (${bucketLabel(chart.data.bucket_seconds)} average)` : "";
+    tooltip.replaceChildren();
+    const time = document.createElement("div");
+    time.className = "time";
+    time.textContent = formatTime(ts * 1000, chart.range === "7d");
+    const reading = document.createElement("div");
+    reading.className = "reading";
+    reading.textContent = `${withUnit(value)}${note}`;
+    tooltip.append(time, reading);
+    tooltip.hidden = false;
+    // Keep the tooltip beside the crosshair and inside the chart
+    const tipWidth = tooltip.offsetWidth;
+    tooltip.style.left = `${cx + 12 + tipWidth > view.width ? cx - 12 - tipWidth : cx + 12}px`;
+  }
+
+  function hideHover() {
+    if (chart && chart.view) chart.view.hover.classList.remove("on");
+    $("chart-tooltip").hidden = true;
+  }
+
+  for (const trigger of document.querySelectorAll(".chart-trigger")) {
+    trigger.addEventListener("click", () => openChart(trigger));
+  }
+  for (const button of document.querySelectorAll(".ranges button")) {
+    button.addEventListener("click", () => {
+      if (!chart || chart.range === button.dataset.range) return;
+      chart.range = button.dataset.range;
+      loadChart(false);
+    });
+  }
+  $("chart-close").addEventListener("click", () => chartDialog.close());
+  // A click on the dimmed backdrop lands on the dialog element itself; clicks on the content don't
+  chartDialog.addEventListener("click", event => { if (event.target === chartDialog) chartDialog.close(); });
+  chartDialog.addEventListener("close", () => { chart = null; chartRequest++; });
+  $("chart-svg").addEventListener("pointermove", showHover);
+  $("chart-svg").addEventListener("pointerleave", hideHover);
+  // Redraw straight away on resize; once resizing settles, fetch again if the width changed enough
+  // to want noticeably more or fewer points (e.g. turning a phone sideways)
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    if (!chart || !chart.data) return;
+    drawChart();
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      if (chart && chart.data && Math.abs(pointsForWidth() - chart.pointsWanted) > chart.pointsWanted * 0.25) {
+        loadChart(true);
+      }
+    }, 300);
+  });
+
+  setInterval(showStatus, 1000);
+  update();
+</script>
+</body>
+</html>
