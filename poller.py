@@ -18,6 +18,7 @@ PRUNE_EVERY_SECONDS = 24 * 3600
 STRING_COLUMNS = ["pv1_power", "pv2_power"]
 FAILURES_BEFORE_SCAN = 3          # failed polls in a row before looking for the logger elsewhere
 MIN_SECONDS_BETWEEN_SCANS = 600   # so an offline logger doesn't cause a scan on every poll
+REFRESH_COOLDOWN_SECONDS = 10     # an on-demand refresh within this long of the last one (or of a poll) reuses that reading
 
 
 def log(message):
@@ -39,9 +40,15 @@ class Poller:
         self._last_scan = None     # time.monotonic() of the last scan
         self._last_subnet = None   # the network that scan searched
         self._lock = threading.Lock()
+        # Held while talking to the data logger, so a refresh from the page and a scheduled poll
+        # never connect at the same time (the logger copes badly with simultaneous connections)
+        self._read_lock = threading.Lock()
         self._latest = None        # most recent successful read_data() result
         self._previous = None      # the successful reading before that, for the page's rise/fall arrows
         self._latest_ts = None     # when it was taken (Unix seconds)
+        self._latest_saved = False # False for an on-demand reading, which isn't stored in the database
+        self._last_refresh = None  # time.monotonic() of the last on-demand refresh
+        self._last_refresh_error = None
         self._last_error = None    # message from the most recent failed poll, cleared on success
         self._pv_energy_today = None   # estimated kWh per PV string since the inverter's midnight
         self._next_poll_ts = None
@@ -62,10 +69,45 @@ class Poller:
                 "previous": self._previous,
                 "pv_energy_today": self._pv_energy_today,
                 "taken_at": self._latest_ts,
+                "saved": self._latest_saved,
                 "error": self._last_error,
                 "next_poll_at": self._next_poll_ts,
                 "host": self.host,
             }
+
+    def refresh_now(self):
+        """Read the inverter straight away for the page, without saving the reading.
+
+        The database only gets the scheduled polls, so the history stays one reading per interval.
+        Returns None on success, or an error message. Requests within REFRESH_COOLDOWN_SECONDS of the
+        last refresh or reading don't read again, so several browsers can't flood the logger.
+        """
+        if self.host is None:
+            return "No data logger address yet; the scheduled poll is still looking for it"
+        with self._read_lock:
+            with self._lock:
+                recent_reading = (self._latest_ts is not None
+                                  and time.time() - self._latest_ts < REFRESH_COOLDOWN_SECONDS)
+            if recent_reading:
+                return None
+            if self._last_refresh is not None and time.monotonic() - self._last_refresh < REFRESH_COOLDOWN_SECONDS:
+                return self._last_refresh_error
+            self._last_refresh = time.monotonic()
+            host = self.host
+            ts = int(time.time())
+            try:
+                data = read_data(host)
+            except (OSError, RuntimeError) as e:
+                # Not counted towards FAILURES_BEFORE_SCAN: finding the logger is the scheduled poll's job
+                self._last_refresh_error = f"Can't read inverter at {host}: {e}"
+                log(f"refresh: {self._last_refresh_error}")
+                return self._last_refresh_error
+            self._last_refresh_error = None
+            with self._lock:
+                self._previous = self._latest
+                self._latest, self._latest_ts, self._last_error = data, ts, None
+                self._latest_saved = False
+        return None
 
     # ---------- finding the data logger ----------
 
@@ -157,7 +199,8 @@ class Poller:
 
         ts = int(time.time())
         try:
-            data = read_data(self.host)
+            with self._read_lock:
+                data = read_data(self.host)
         except (OSError, RuntimeError) as e:
             message = f"Can't read inverter at {self.host}: {e}"
             log(message)
@@ -172,6 +215,7 @@ class Poller:
         with self._lock:
             self._previous = self._latest
             self._latest, self._latest_ts, self._last_error = data, ts, None
+            self._latest_saved = True
         try:
             self.store.insert(ts, data)
         except sqlite3.Error as e:

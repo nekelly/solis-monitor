@@ -13,7 +13,7 @@ import time
 
 from flask import Flask, jsonify, render_template, request
 
-from poller import Poller
+from poller import REFRESH_COOLDOWN_SECONDS, Poller
 from inverter import ENERGY_LABELS, VERSION
 from store import Store
 
@@ -56,21 +56,33 @@ app = Flask(__name__, template_folder=os.path.dirname(os.path.abspath(__file__))
 
 @app.get("/")
 def index():
-    return render_template("index.html", page_title=PAGE_TITLE, version=VERSION, energy_labels=ENERGY_LABELS)
+    return render_template("index.html", page_title=PAGE_TITLE, version=VERSION, energy_labels=ENERGY_LABELS,
+                           refresh_cooldown_seconds=REFRESH_COOLDOWN_SECONDS)
 
 
-@app.get("/api/data")
-def api_data():
+def latest_data():
     snapshot = poller.snapshot()
     now = time.time()
     next_poll_at = snapshot.pop("next_poll_at")
-    return jsonify(
+    return dict(
         **snapshot,
         # Relative times, so a difference between the browser's and server's clocks doesn't matter
         age_seconds=None if snapshot["taken_at"] is None else round(now - snapshot["taken_at"]),
         seconds_until_next_poll=None if next_poll_at is None else max(0, round(next_poll_at - now)),
         poll_seconds=POLL_SECONDS,
     )
+
+
+@app.get("/api/data")
+def api_data():
+    return jsonify(latest_data())
+
+
+@app.post("/api/refresh")
+def api_refresh():
+    """Read the inverter now for the page. The reading isn't saved, so the history stays one row per poll."""
+    error = poller.refresh_now()
+    return jsonify(**latest_data(), refresh_error=error)
 
 
 # Graph time ranges, in seconds

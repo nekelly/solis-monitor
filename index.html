@@ -199,13 +199,25 @@
     border-radius: 999px;
     cursor: pointer;
   }
+  .refresh {
+    padding: 3px 10px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text-secondary);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .refresh:hover:not(:disabled) { background: var(--gridline); }
+  .refresh:disabled { opacity: 0.5; cursor: default; }
   .ranges button[aria-pressed="true"] { color: var(--surface); background: var(--text-primary); border-color: var(--text-primary); }
   .chart-box { position: relative; height: 300px; }
   #chart-svg { display: block; width: 100%; height: 100%; touch-action: pan-y; }
   .chart-grid { stroke: var(--gridline); stroke-width: 1; }
   .chart-baseline { stroke: var(--baseline); stroke-width: 1; }
   .chart-axis { fill: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-  .chart-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .chart-line { fill: none; stroke: var(--accent); stroke-width: 1.25; stroke-linejoin: round; stroke-linecap: round; }
   .chart-area { fill: var(--accent); opacity: 0.12; }
   .chart-point { fill: var(--accent); }
   .chart-cross { stroke: var(--text-muted); stroke-width: 1; }
@@ -238,6 +250,7 @@
     <h1>{{ page_title }}</h1>
     <div class="controls">
       <div class="status" id="status">Connecting…</div>
+      <button type="button" class="refresh" id="refresh">Refresh now</button>
     </div>
   </header>
 
@@ -354,6 +367,7 @@
   const IDLE_WATTS = 10;           // below this, battery and grid are shown as idle
   const FETCH_DELAY_SECONDS = 3;   // wait this long after a scheduled poll, so the new reading is ready
   const RETRY_SECONDS = 30;        // how soon to try again if the web app itself can't be reached
+  const REFRESH_COOLDOWN_SECONDS = {{ refresh_cooldown_seconds }};  // "Refresh now" is disabled this long after a click
 
   const $ = id => document.getElementById(id);
   const watts = w => Math.round(Math.abs(w)).toLocaleString();
@@ -364,6 +378,7 @@
   let nextFetchAt = 0;
   let timer = null;
   let pollSeconds = null;  // the server's POLL_SECONDS, shown in the status line
+  let latestSaved = true;  // false for an on-demand reading, which isn't in the history
 
   function render(d, pvEnergy) {
     $("solar-power").textContent = watts(d.solar_power);
@@ -431,34 +446,68 @@
     $("banner-text").textContent = title ? `${detail}${shown}` : "";
   }
 
+  // Shows a reply from api/data or api/refresh and schedules the next fetch for just after the next poll
+  function apply(body) {
+    if (body.reading) {
+      render(body.reading, body.pv_energy_today);
+      showTrends(body.reading, body.previous);
+      // age_seconds is relative, so this is right even if the browser and server clocks differ
+      takenAt = Date.now() - body.age_seconds * 1000;
+      // A new saved reading arrived: refresh an open graph without the "Loading…" flash
+      // (an on-demand reading isn't in the history, so the graph wouldn't change)
+      if (body.taken_at !== lastTakenAt && body.saved && chart && chart.data) loadChart(true);
+      lastTakenAt = body.taken_at;
+      latestSaved = body.saved;
+    }
+    pollSeconds = body.poll_seconds;
+    showProblem(body.error ? "Can't reach inverter" : null, body.error);
+    $("content").classList.toggle("stale", Boolean(body.error) || !body.reading);
+    // Before the first poll has finished there's no schedule yet, so check again shortly
+    return (body.seconds_until_next_poll ?? 0) + FETCH_DELAY_SECONDS;
+  }
+
+  function scheduleUpdate(delaySeconds) {
+    nextFetchAt = Date.now() + delaySeconds * 1000;
+    clearTimeout(timer);
+    timer = setTimeout(update, delaySeconds * 1000);
+    showStatus();
+  }
+
   async function update() {
     let delaySeconds = RETRY_SECONDS;
     try {
       const response = await fetch("api/data", { cache: "no-store" });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = await response.json();
-      if (body.reading) {
-        render(body.reading, body.pv_energy_today);
-        showTrends(body.reading, body.previous);
-        // age_seconds is relative, so this is right even if the browser and server clocks differ
-        takenAt = Date.now() - body.age_seconds * 1000;
-        // A new reading arrived: refresh an open graph without the "Loading…" flash
-        if (body.taken_at !== lastTakenAt && chart && chart.data) loadChart(true);
-        lastTakenAt = body.taken_at;
-      }
-      // Before the first poll has finished there's no schedule yet, so check again shortly
-      delaySeconds = (body.seconds_until_next_poll ?? 0) + FETCH_DELAY_SECONDS;
-      pollSeconds = body.poll_seconds;
-      showProblem(body.error ? "Can't reach inverter" : null, body.error);
-      $("content").classList.toggle("stale", Boolean(body.error) || !body.reading);
+      delaySeconds = apply(await response.json());
     } catch (e) {
       showProblem("Can't reach the dashboard server", `${e.message}.`);
       $("content").classList.add("stale");
     }
-    nextFetchAt = Date.now() + delaySeconds * 1000;
-    clearTimeout(timer);
-    timer = setTimeout(update, delaySeconds * 1000);
-    showStatus();
+    scheduleUpdate(delaySeconds);
+  }
+
+  // Reads the inverter now; the reading is shown but not saved, so the history keeps its regular interval
+  async function refreshNow() {
+    const button = $("refresh");
+    button.disabled = true;
+    button.textContent = "Refreshing…";
+    // The cooldown runs from the click, whether or not the request has finished
+    const cooldown = new Promise(resolve => setTimeout(resolve, REFRESH_COOLDOWN_SECONDS * 1000));
+    let delaySeconds = RETRY_SECONDS;
+    try {
+      const response = await fetch("api/refresh", { method: "POST", cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const body = await response.json();
+      delaySeconds = apply(body);
+      if (body.refresh_error) showProblem("Refresh failed", body.refresh_error);
+    } catch (e) {
+      showProblem("Can't reach the dashboard server", `${e.message}.`);
+      $("content").classList.add("stale");
+    }
+    scheduleUpdate(delaySeconds);
+    button.textContent = "Refresh now";
+    await cooldown;
+    button.disabled = false;
   }
 
   // e.g. 30 -> "30 s", 180 -> "3 min", 90 -> "90 s"
@@ -468,7 +517,8 @@
   function showStatus() {
     const secondsLeft = Math.max(0, Math.ceil((nextFetchAt - Date.now()) / 1000));
     const parts = [
-      takenAt ? `Reading from ${new Date(takenAt).toLocaleTimeString()}` : "Waiting for the first reading",
+      takenAt ? `Reading from ${new Date(takenAt).toLocaleTimeString()}${latestSaved ? "" : " (live, not saved)"}`
+              : "Waiting for the first reading",
       `update in ${secondsLeft} s`,
     ];
     if (pollSeconds) parts.push(`polled every ${intervalText(pollSeconds)}`);
@@ -479,7 +529,7 @@
 
   const CHART_HEIGHT = 300;
   const CHART_MARGIN = { top: 12, right: 16, bottom: 28, left: 56 };
-  const PIXELS_PER_POINT = 4;   // ask the server for about one averaged point per this many pixels of graph width
+  const PIXELS_PER_POINT = 2;   // ask the server for about one averaged point per this many pixels of graph width
   const HOUR = 3600e3, DAY = 24 * HOUR;
   const svgNS = "http://www.w3.org/2000/svg";
   const chartDialog = $("chart-dialog");
@@ -525,7 +575,7 @@
   // How many points suit the graph's current width (the server averages readings down to this)
   function pointsForWidth() {
     const plotWidth = $("chart-box").clientWidth - CHART_MARGIN.left - CHART_MARGIN.right;
-    return Math.max(20, Math.round(plotWidth / PIXELS_PER_POINT));
+    return Math.max(40, Math.round(plotWidth / PIXELS_PER_POINT));
   }
 
   async function loadChart(quiet) {
@@ -771,6 +821,7 @@
     }, 300);
   });
 
+  $("refresh").addEventListener("click", refreshNow);
   setInterval(showStatus, 1000);
   update();
 </script>

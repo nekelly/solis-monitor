@@ -20,7 +20,7 @@ Reads live data from a Solis S6 hybrid inverter over Modbus TCP (port 502 on the
 
 - **Polling:** the poller runs inside the web app from the moment it starts, whether or not anyone has the page open. It reads the inverter on whole multiples of `POLL_SECONDS` (with 60 s, every minute on :00), so readings line up neatly for graphs.
 - **Storage:** each reading becomes one row in the `readings` table, timestamped with the server's clock. Readings older than `RETENTION_DAYS` are deleted once a day.
-- **The page never contacts the inverter.** It fetches the latest reading from the web app just after each poll, so it doesn't matter how many browsers are open.
+- **The page never contacts the inverter.** It fetches the latest reading from the web app just after each poll, so it doesn't matter how many browsers are open. The one exception is the **Refresh now** button (below), which asks the web app for an extra reading that isn't saved.
 
 ## Files
 
@@ -82,6 +82,8 @@ The page shows:
 
 The page updates itself about 3 seconds after each poll. The line under the title shows when the reading on screen was taken, counts down to the next update, and gives the polling interval, for example "Reading from 18:46:00 · update in 42 s · polled every 3 min". It follows the device's light or dark setting. If the latest poll failed, a red warning appears and the last good reading stays on screen, greyed out. A separate warning appears if the page can't reach the web app at all.
 
+**Refresh now:** the button next to the status line reads the inverter straight away. The reading is shown but **not saved**, so the history and graphs stay at exactly one reading per poll interval. Until the next scheduled poll, the status line says "(live, not saved)" after the time. The button is disabled for 10 seconds after each click. The server also limits refreshes: if the latest reading (scheduled or on demand) is less than 10 seconds old, or a refresh was done in the last 10 seconds, it returns that reading without contacting the inverter again. A refresh never runs at the same time as a scheduled poll, and a failed refresh doesn't count towards the failed polls that start a scan.
+
 **Graphs:** click any box with a small graph icon in its bottom-right corner to open a graph over time:
 - **Solar, House load, PV1 string and PV2 string:** power.
 - **Battery:** charge level (%).
@@ -138,8 +140,9 @@ The poller looks for the logger itself when it needs to:
 | Path | Returns |
 |---|---|
 | `/` | The dashboard page |
-| `/api/data` | JSON: `reading` (the latest successful reading, or `null` before the first one), `previous` (the successful reading before it, for the arrows), `pv_energy_today` (estimated kWh since midnight for `pv1_power` and `pv2_power`, or `null`), `age_seconds` (how old it is), `error` (why the latest poll failed, or `null`), `seconds_until_next_poll`, `poll_seconds`, and `taken_at` (Unix time) |
-| `/api/history?field=…&range=…` | Stored readings of one database column (e.g. `solar_power`) for `range` = `6h`, `12h`, `24h` or `7d`. Returns `points` (`[[unix_time, value], …]`), `bucket_seconds`, `peak` and `low` (`[unix_time, value]` of the single highest and lowest readings). Optional `points` (20–1,500, default 1,500): roughly how many points to return. The page sends about one per 4 pixels of graph width (`PIXELS_PER_POINT` in `index.html`). If the range has no more readings than that, every reading is returned. Otherwise readings are averaged into steps of a whole number of poll intervals, so each step holds the same number of readings. The `peak` and `low` values always come from the individual readings. An unknown field gives 404 and an unknown range 400 |
+| `/api/data` | JSON: `reading` (the latest successful reading, or `null` before the first one), `previous` (the successful reading before it, for the arrows), `pv_energy_today` (estimated kWh since midnight for `pv1_power` and `pv2_power`, or `null`), `age_seconds` (how old it is), `error` (why the latest poll failed, or `null`), `seconds_until_next_poll`, `poll_seconds`, `taken_at` (Unix time), and `saved` (`false` if the reading came from a refresh and isn't in the database) |
+| `POST /api/refresh` | Reads the inverter now (see **Refresh now**) without saving the reading, then returns the same JSON as `/api/data` plus `refresh_error` (why the refresh failed, or `null`) |
+| `/api/history?field=…&range=…` | Stored readings of one database column (e.g. `solar_power`) for `range` = `6h`, `12h`, `24h` or `7d`. Returns `points` (`[[unix_time, value], …]`), `bucket_seconds`, `peak` and `low` (`[unix_time, value]` of the single highest and lowest readings). Optional `points` (20–1,500, default 1,500): roughly how many points to return. The page sends about one per 2 pixels of graph width (at least 40) (`PIXELS_PER_POINT` in `index.html`). If the range has no more readings than that, every reading is returned. Otherwise readings are averaged into steps of a whole number of poll intervals, so each step holds the same number of readings. The `peak` and `low` values always come from the individual readings. An unknown field gives 404 and an unknown range 400 |
 | `/healthz` | `ok`, or HTTP 503 if the polling thread has stopped. Used by the Docker health check; it doesn't contact the inverter |
 
 ### The database
