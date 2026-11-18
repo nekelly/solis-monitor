@@ -14,7 +14,7 @@ import struct
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-VERSION = "1.2"
+VERSION = "1.3"
 PORT = 502
 UNIT = 1
 MAX_SCAN_HOSTS = 1024   # refuse to scan networks bigger than a /22

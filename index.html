@@ -348,22 +348,19 @@
           <tr><th scope="col"></th><th scope="col">Today</th><th scope="col">Yesterday</th><th scope="col"><span class="sr-only">Daily totals</span></th></tr>
         </thead>
         <tbody>
-          {# Rows that have a daily-totals bar chart; add more keys here to give them a "Daily" button #}
-          {% set daily_charts = ["solar"] %}
           {% for key, label in energy_labels.items() %}
-          {# row class is the key's first word: solar, house, battery or grid #}
+          {# row class is the key's first word: solar, house, battery or grid;
+             each row's "Daily" button opens a bar chart of its <key>_today counter #}
           <tr data-energy="{{ key }}" class="{{ key.split('_')[0] }}">
             <td>{{ label }}</td>
             <td><span data-field="today">–</span><span class="unit">kWh</span></td>
             <td><span data-field="yesterday">–</span><span class="unit">kWh</span></td>
             <td>
-              {% if key in daily_charts %}
               <button type="button" class="daily-button chart-trigger" aria-haspopup="dialog" data-kind="daily"
                       data-field="{{ key }}_today" data-title="{{ label }} · daily totals" data-unit="kWh"
                       data-decimals="1" data-color="{{ key.split('_')[0] }}" aria-label="{{ label }} daily totals">
                 <svg viewBox="0 0 12 12" aria-hidden="true"><rect x="0" y="6" width="3" height="6" rx="0.5"/><rect x="4.5" y="2" width="3" height="10" rx="0.5"/><rect x="9" y="4" width="3" height="8" rx="0.5"/></svg>Daily
               </button>
-              {% endif %}
             </td>
           </tr>
           {% endfor %}
