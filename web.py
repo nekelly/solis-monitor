@@ -135,6 +135,30 @@ def api_history():
     )
 
 
+DAILY_MAX_DAYS = 40   # enough for "this month"; limits how far back /api/daily will look
+
+
+@app.get("/api/daily")
+def api_daily():
+    """Daily totals of one energy counter (a *_today column) since the browser's local midnight `since`.
+
+    The page groups the segments into its own local dates, so the server doesn't need the browser's
+    time zone. Readings start a day before `since`, so the first day's segment is complete rather
+    than a few minutes cut off at midnight; the page drops anything dated before the range.
+    """
+    field = request.args.get("field", "")
+    if not field.endswith("_today") or field not in store.columns():
+        return jsonify(error=f"unknown daily counter {field!r}"), 404
+    try:
+        since = int(request.args.get("since", ""))
+    except ValueError:
+        return jsonify(error="since must be a Unix time in seconds"), 400
+    now = int(time.time())
+    since = max(since, now - DAILY_MAX_DAYS * 24 * 3600)
+    segments = store.daily_totals(field, since - 24 * 3600)
+    return jsonify(field=field, days=[[first, last, round(value, 2)] for first, last, value in segments])
+
+
 @app.get("/healthz")
 def healthz():
     # Doesn't touch the inverter, so the container stays healthy when the logger is offline;

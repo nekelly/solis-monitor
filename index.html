@@ -140,6 +140,25 @@
     background: var(--accent, var(--neutral));
   }
 
+  /* "Daily" button in the energy table: opens a bar chart of daily totals */
+  .daily-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 9px;
+    font: inherit;
+    font-size: 12px;
+    color: var(--text-secondary);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .daily-button:hover { background: var(--gridline); }
+  .daily-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .daily-button svg { width: 12px; height: 12px; fill: var(--accent); }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
   footer { margin-top: 16px; font-size: 12px; color: var(--text-muted); }
 
   /* Tiles that open a graph */
@@ -225,6 +244,11 @@
   .chart-hover { visibility: hidden; }
   .chart-hover.on { visibility: visible; }
   .chart-message { fill: var(--text-secondary); font-size: 14px; }
+  .chart-bar { fill: var(--accent); }
+  .chart-bar.partial { opacity: 0.5; }   /* today, still adding up */
+  .chart-bar.lit { stroke: var(--text-primary); stroke-width: 1.5; }
+  .chart-bar-hit { fill: transparent; outline: none; }
+  .chart-value { fill: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
   .chart-tooltip {
     position: absolute;
     top: 8px;
@@ -321,16 +345,26 @@
       <div class="table-wrap">
       <table>
         <thead>
-          <tr><th scope="col"></th><th scope="col">Today</th><th scope="col">Yesterday</th><th scope="col">Total</th></tr>
+          <tr><th scope="col"></th><th scope="col">Today</th><th scope="col">Yesterday</th><th scope="col"><span class="sr-only">Daily totals</span></th></tr>
         </thead>
         <tbody>
+          {# Rows that have a daily-totals bar chart; add more keys here to give them a "Daily" button #}
+          {% set daily_charts = ["solar"] %}
           {% for key, label in energy_labels.items() %}
           {# row class is the key's first word: solar, house, battery or grid #}
           <tr data-energy="{{ key }}" class="{{ key.split('_')[0] }}">
             <td>{{ label }}</td>
             <td><span data-field="today">–</span><span class="unit">kWh</span></td>
             <td><span data-field="yesterday">–</span><span class="unit">kWh</span></td>
-            <td><span data-field="total">–</span><span class="unit">kWh</span></td>
+            <td>
+              {% if key in daily_charts %}
+              <button type="button" class="daily-button chart-trigger" aria-haspopup="dialog" data-kind="daily"
+                      data-field="{{ key }}_today" data-title="{{ label }} · daily totals" data-unit="kWh"
+                      data-decimals="1" data-color="{{ key.split('_')[0] }}" aria-label="{{ label }} daily totals">
+                <svg viewBox="0 0 12 12" aria-hidden="true"><rect x="0" y="6" width="3" height="6" rx="0.5"/><rect x="4.5" y="2" width="3" height="10" rx="0.5"/><rect x="9" y="4" width="3" height="8" rx="0.5"/></svg>Daily
+              </button>
+              {% endif %}
+            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -353,6 +387,9 @@
       <button type="button" data-range="12h">12 hours</button>
       <button type="button" data-range="24h">24 hours</button>
       <button type="button" data-range="7d">7 days</button>
+      {# Ranges for the daily-totals bar chart; openChart shows one set or the other #}
+      <button type="button" data-range="week" hidden>Last 7 days</button>
+      <button type="button" data-range="month" hidden>This month</button>
     </div>
     <div class="chart-box" id="chart-box">
       <svg id="chart-svg" role="img" aria-labelledby="chart-title"></svg>
@@ -410,7 +447,6 @@
       const counter = d.energy[row.dataset.energy];
       row.querySelector('[data-field="today"]').textContent = fixed(counter.today, 1);
       row.querySelector('[data-field="yesterday"]').textContent = fixed(counter.yesterday, 1);
-      row.querySelector('[data-field="total"]').textContent = counter.total.toLocaleString();
     }
   }
 
@@ -559,13 +595,20 @@
     return `${seconds}-second`;
   }
 
+  const DAILY_RANGES = new Set(["week", "month"]);
+
+  // kind "line" (default): a power/charge history graph. kind "daily": bars of a daily energy counter
   function openChart(trigger) {
-    chart = { field: trigger.dataset.field, title: trigger.dataset.title, unit: trigger.dataset.unit,
+    const kind = trigger.dataset.kind || "line";
+    chart = { kind, field: trigger.dataset.field, title: trigger.dataset.title, unit: trigger.dataset.unit,
               decimals: trigger.dataset.decimals !== undefined ? Number(trigger.dataset.decimals) : null,
               peakLabel: trigger.dataset.peakLabel || "Peak",
               lowLabel: trigger.dataset.lowLabel || null,     // also show the lowest reading, if set
               signed: trigger.dataset.signed === "true",      // values above/below zero mean different things
-              range: "6h", data: null, view: null };
+              range: kind === "daily" ? "week" : "6h", data: null, view: null };
+    for (const button of document.querySelectorAll(".ranges button")) {
+      button.hidden = DAILY_RANGES.has(button.dataset.range) !== (kind === "daily");
+    }
     chartDialog.className = trigger.dataset.color || "";   // sets --accent for the line colour
     $("chart-title").textContent = chart.title;
     chartDialog.showModal();
@@ -589,10 +632,12 @@
       $("chart-summary").textContent = "";
     }
     chart.pointsWanted = pointsForWidth();
+    const field = encodeURIComponent(chart.field);
+    const url = chart.kind === "daily"
+      ? `api/daily?field=${field}&since=${Math.floor(dailyStart(chart.range).getTime() / 1000)}`
+      : `api/history?field=${field}&range=${chart.range}&points=${chart.pointsWanted}`;
     try {
-      const response = await fetch(
-        `api/history?field=${encodeURIComponent(chart.field)}&range=${chart.range}&points=${chart.pointsWanted}`,
-        { cache: "no-store" });
+      const response = await fetch(url, { cache: "no-store" });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
       if (request !== chartRequest || !chartDialog.open) return;
@@ -663,6 +708,7 @@
   }
 
   function drawChart() {
+    if (chart.kind === "daily") return drawBars();
     const data = chart.data;
     const points = data.points;
     const bucketed = data.bucket_seconds > data.poll_seconds;
@@ -744,9 +790,150 @@
     return parts.join(" · ");
   }
 
+  // ---------- Daily totals (bar chart in the same dialog) ----------
+
+  // Local midnight at the start of a daily range: 6 days before today, or the 1st of this month
+  function dailyStart(range) {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    if (range === "week") d.setDate(d.getDate() - 6);
+    else d.setDate(1);
+    return d;
+  }
+
+  const dayKey = d => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+
+  // One entry per local date in the range, with that day's total (null if there were no readings)
+  function dailyValues() {
+    // Each segment is one inverter day; dating it by its middle keeps it on the right date even if
+    // the inverter's midnight is a little off the browser's
+    const totals = new Map();
+    for (const [first, last, value] of chart.data.days) {
+      const key = dayKey(new Date((first + last) / 2 * 1000));
+      totals.set(key, Math.max(value, totals.get(key) ?? -Infinity));
+    }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const days = [];
+    for (const d = dailyStart(chart.range); d <= today; d.setDate(d.getDate() + 1)) {
+      const value = totals.get(dayKey(d));
+      days.push({ date: new Date(d), value: value === undefined ? null : value, today: d.getTime() === today.getTime() });
+    }
+    return days;
+  }
+
+  // Column with a 4px rounded top and a square base
+  function barPath(left, top, w, base) {
+    const r = Math.min(4, w / 2, base - top);
+    return `M${left},${base}V${top + r}A${r},${r} 0 0 1 ${left + r},${top}H${left + w - r}`
+         + `A${r},${r} 0 0 1 ${left + w},${top + r}V${base}Z`;
+  }
+
+  const dayLabel = (d, long) => d.toLocaleDateString(undefined,
+    long ? { weekday: "long", day: "numeric", month: "long" } : { weekday: "short", day: "numeric" });
+
+  function drawBars() {
+    const days = dailyValues();
+    const values = days.filter(d => d.value !== null).map(d => d.value);
+    if (!values.length) {
+      drawMessage("No readings in this period yet.");
+      $("chart-summary").textContent = "";
+      return;
+    }
+
+    const width = $("chart-box").clientWidth;
+    const m = { ...CHART_MARGIN, top: 24 };   // room for value labels above the tallest bar
+    const plotW = width - m.left - m.right;
+    const plotH = CHART_HEIGHT - m.top - m.bottom;
+    const yTicks = niceTicks(0, Math.max(...values), 5);
+    const yHigh = yTicks[yTicks.length - 1];
+    const y = v => m.top + (1 - v / yHigh) * plotH;
+    const band = plotW / days.length;
+    const barW = Math.min(24, Math.max(2, band * 0.6));   // capped, so the rest of each slot is air
+    const center = i => m.left + (i + 0.5) * band;
+    const svg = $("chart-svg");
+    svg.replaceChildren();
+
+    for (const v of yTicks) {
+      svg.append(svgEl("line", { x1: m.left, x2: width - m.right, y1: y(v), y2: y(v), class: v === 0 ? "chart-baseline" : "chart-grid" }));
+      svg.append(svgEl("text", { x: m.left - 8, y: y(v) + 4, "text-anchor": "end", class: "chart-axis" }, axisLabel(v)));
+    }
+    svg.append(svgEl("text", { x: 4, y: m.top - 10, class: "chart-axis" }, chart.unit));
+
+    // Date labels: weekday and day for a week; day numbers for the month, thinned out if they'd crowd
+    const week = chart.range === "week";
+    const every = Math.max(1, Math.ceil((week ? 60 : 22) / band));
+    days.forEach((day, i) => {
+      if (i % every) return;
+      const text = week ? dayLabel(day.date, false) : String(day.date.getDate());
+      svg.append(svgEl("text", { x: center(i), y: CHART_HEIGHT - 8, "text-anchor": "middle", class: "chart-axis" }, text));
+    });
+
+    // Values are printed only on the best day and today; the rest are in each bar's tooltip
+    const best = days.reduce((b, d, i) => d.value !== null && (b < 0 || d.value > days[b].value) ? i : b, -1);
+    const bars = days.map((day, i) => {
+      if (!day.value) return null;
+      const bar = svgEl("path", { d: barPath(center(i) - barW / 2, y(day.value), barW, y(0)),
+                                  class: `chart-bar${day.today ? " partial" : ""}` });
+      svg.append(bar);
+      if (i === best || day.today) {
+        svg.append(svgEl("text", { x: center(i), y: y(day.value) - 6, "text-anchor": "middle", class: "chart-value" },
+                         fixed(day.value, 1)));
+      }
+      return bar;
+    });
+
+    // Hit areas: each day's whole slot, so a short (or missing) bar is still easy to point at
+    days.forEach((day, i) => {
+      const hit = svgEl("rect", { x: m.left + i * band, y: m.top, width: band, height: plotH, class: "chart-bar-hit",
+                                  tabindex: 0, role: "img", "aria-label": `${dayLabel(day.date, true)}: ${barText(day)}` });
+      hit.addEventListener("pointerenter", () => showBarTip(i));
+      hit.addEventListener("focus", () => showBarTip(i));
+      hit.addEventListener("pointerleave", hideHover);
+      hit.addEventListener("blur", hideHover);
+      svg.append(hit);
+    });
+
+    chart.view = { days, bars, center, width, hover: null };
+    $("chart-summary").textContent = dailySummary(days, best);
+  }
+
+  const barText = day => day.value === null ? "no readings" : `${withUnit(day.value)}${day.today ? " so far" : ""}`;
+
+  function showBarTip(i) {
+    const view = chart && chart.view;
+    if (!view || !view.days) return;
+    view.bars.forEach((bar, j) => bar && bar.classList.toggle("lit", j === i));
+    const day = view.days[i];
+    const tooltip = $("chart-tooltip");
+    const time = document.createElement("div");
+    time.className = "time";
+    time.textContent = dayLabel(day.date, true);
+    const reading = document.createElement("div");
+    reading.className = "reading";
+    reading.textContent = barText(day);
+    tooltip.replaceChildren(time, reading);
+    tooltip.hidden = false;
+    const cx = view.center(i), tipWidth = tooltip.offsetWidth;
+    tooltip.style.left = `${cx + 16 + tipWidth > view.width ? cx - 16 - tipWidth : cx + 16}px`;
+  }
+
+  // e.g. "Total 98.4 kWh · average 14.2 kWh a day · best Sat 15, 21.0 kWh · today so far is the faded bar"
+  function dailySummary(days, best) {
+    const withData = days.filter(d => d.value !== null);
+    const complete = withData.filter(d => !d.today);   // today isn't finished, so it's left out of the average
+    const parts = [`Total ${withUnit(withData.reduce((sum, d) => sum + d.value, 0))}`];
+    if (complete.length) {
+      parts.push(`average ${withUnit(complete.reduce((sum, d) => sum + d.value, 0) / complete.length)} a day`);
+    }
+    parts.push(`best ${dayLabel(days[best].date, false)}, ${withUnit(days[best].value)}`);
+    if (days[days.length - 1].today && days[days.length - 1].value) parts.push("today so far is the faded bar");
+    return parts.join(" · ");
+  }
+
   function showHover(event) {
     const view = chart && chart.view;
-    if (!view) return;
+    if (!view || chart.kind !== "line") return;
     const px = event.clientX - $("chart-svg").getBoundingClientRect().left;
     const t = view.t0 + (px - view.m.left) / view.plotW * (view.t1 - view.t0);
     // Binary search for the nearest reading
@@ -787,7 +974,8 @@
   }
 
   function hideHover() {
-    if (chart && chart.view) chart.view.hover.classList.remove("on");
+    if (chart && chart.view && chart.view.hover) chart.view.hover.classList.remove("on");
+    if (chart && chart.view && chart.view.bars) chart.view.bars.forEach(bar => bar && bar.classList.remove("lit"));
     $("chart-tooltip").hidden = true;
   }
 
@@ -815,7 +1003,7 @@
     drawChart();
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
-      if (chart && chart.data && Math.abs(pointsForWidth() - chart.pointsWanted) > chart.pointsWanted * 0.25) {
+      if (chart && chart.data && chart.kind === "line" && Math.abs(pointsForWidth() - chart.pointsWanted) > chart.pointsWanted * 0.25) {
         loadChart(true);
       }
     }, 300);

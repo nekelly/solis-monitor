@@ -86,6 +86,34 @@ class Store:
                 (start_ts, end_ts)).fetchone()
         return points, (peak if peak[1] is not None else None), (low if low[1] is not None else None)
 
+    def daily_totals(self, column, start_ts):
+        """Split a daily energy counter (e.g. solar_today) into one segment per inverter day.
+
+        The counter only ever rises during a day and drops back to zero at the inverter's midnight,
+        so a new segment starts wherever a reading is lower than the one before. Following the
+        counter's own resets keeps the days the same as the inverter's "today" and "yesterday",
+        even if its clock is a few minutes out from the server's or the browser's.
+
+        Returns a list of (first_ts, last_ts, highest value) per segment, oldest first; the last
+        segment is today so far. A brief glitch can split a day in two, so the caller should take
+        the highest value among segments that fall on the same date.
+        """
+        if column not in self.columns():
+            raise KeyError(column)
+        with closing(self._connect()) as conn:
+            rows = conn.execute(f"SELECT ts, {column} FROM readings WHERE ts >= ? AND {column} IS NOT NULL "
+                                "ORDER BY ts", (start_ts,)).fetchall()
+        segments = []
+        previous = None
+        for ts, value in rows:
+            if previous is None or value < previous:
+                segments.append([ts, ts, value])
+            else:
+                segment = segments[-1]
+                segment[1], segment[2] = ts, max(segment[2], value)
+            previous = value
+        return [tuple(segment) for segment in segments]
+
     def energy_since(self, columns, start_ts, max_gap_seconds):
         """Estimate energy in kWh for power columns (W) from start_ts until now.
 

@@ -78,7 +78,7 @@ The page shows:
 
 - **Power now:** solar, house load, battery (with a charge bar) and grid (Exporting/Importing/Idle).
 - **Inverter:** each string's power, voltage, current and estimated energy so far today, plus AC output and temperature.
-- **Energy:** today, yesterday and total figures.
+- **Energy:** today and yesterday figures. Rows with a **Daily** button (Solar, so far) open a bar chart of daily totals for the last 7 days or this month; today's bar is faded because the day isn't over.
 
 The page updates itself about 3 seconds after each poll. The line under the title shows when the reading on screen was taken, counts down to the next update, and gives the polling interval, for example "Reading from 18:46:00 · update in 42 s · polled every 3 min". It follows the device's light or dark setting. If the latest poll failed, a red warning appears and the last good reading stays on screen, greyed out. A separate warning appears if the page can't reach the web app at all.
 
